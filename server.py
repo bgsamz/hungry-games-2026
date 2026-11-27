@@ -18,9 +18,13 @@ from urllib.parse import parse_qs, urlparse
 PORT = int(os.environ.get("PORT", "8080"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent / "static")).resolve()
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
-MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD_MB", "40")) * 1024 * 1024
-THUMB_PX = 1200
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "host")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD_MB", "100")) * 1024 * 1024
+THUMB_PX = 1200          # gallery previews
+MAIN_PREVIEW_PX = 2400   # the big photo at the top of a dish page
+SESSION_DAYS = 30
+COOKIE = "hg_session"
 
 try:  # Pillow makes small previews for the galleries. Originals are always kept as uploaded.
     from PIL import Image, ImageOps
@@ -70,6 +74,13 @@ with db() as con:
     )
     if "thumb" not in [r[1] for r in con.execute("PRAGMA table_info(photos)")]:
         con.execute("ALTER TABLE photos ADD COLUMN thumb TEXT")
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS main_photos (
+            dish TEXT PRIMARY KEY, filename TEXT NOT NULL, preview TEXT, updated REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, created REAL NOT NULL);
+        """
+    )
 
 upload_log = {}  # ip -> [timestamps]
 upload_lock = threading.Lock()
@@ -133,13 +144,13 @@ def _blank_gps(buf: bytearray, tiff: int, limit: int):
         buf[gps:gps + 2] = b"\x00\x00"  # GPS directory now lists no entries
 
 
-def make_thumb(src: Path, dest: Path) -> bool:
+def make_thumb(src: Path, dest: Path, px: int = THUMB_PX) -> bool:
     if Image is None:
         return False
     try:
         with Image.open(src) as im:
             im = ImageOps.exif_transpose(im)
-            im.thumbnail((THUMB_PX, THUMB_PX))
+            im.thumbnail((px, px))
             if im.mode not in ("RGB", "L"):
                 im = im.convert("RGB")
             im.save(dest, "JPEG", quality=82, optimize=True)
@@ -147,6 +158,51 @@ def make_thumb(src: Path, dest: Path) -> bool:
     except Exception as exc:  # odd file: fall back to showing the original
         print(f"Couldn't make a preview for {src.name}: {exc}", flush=True)
         return False
+
+
+class BadImage(Exception):
+    pass
+
+
+def save_image(data: bytes, preview_px: int = THUMB_PX):
+    """Validate and store an uploaded image at full quality. Returns (filename, preview or None)."""
+    ext = sniff(data)
+    if not ext:
+        raise BadImage("That file isn't a JPEG, PNG, WebP or GIF image. "
+                       "(iPhone: Settings → Camera → Formats → Most Compatible.)")
+    if ext == "jpg":
+        data = scrub_gps(data)
+    pid = secrets.token_urlsafe(12)
+    filename = f"{pid}.{ext}"
+    (PHOTO_DIR / filename).write_bytes(data)
+    preview = None
+    if ext != "gif":  # keep GIFs animated
+        preview = f"{pid}_t.jpg"
+        if not make_thumb(PHOTO_DIR / filename, PHOTO_DIR / preview, preview_px):
+            preview = None
+    return pid, filename, preview
+
+
+def remove_files(*names):
+    for name in names:
+        if name:
+            try:
+                (PHOTO_DIR / name).unlink()
+            except OSError:
+                pass
+
+
+login_log = {}
+login_lock = threading.Lock()
+
+
+def allowed_login(ip: str) -> bool:
+    now = time.time()
+    with login_lock:
+        log = [t for t in login_log.get(ip, []) if now - t < 600]
+        log.append(now)
+        login_log[ip] = log
+        return len(log) <= 10
 
 
 def allowed_upload(ip: str) -> bool:
@@ -172,9 +228,11 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "HungryGames/1.0"
 
     # ---------- helpers ----------
-    def send_json(self, obj, status=200):
+    def send_json(self, obj, status=200, cookie=None):
         body = json.dumps(obj).encode()
         self.send_response(status)
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -200,6 +258,25 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0 or length > limit:
             return None
         return self.rfile.read(length)
+
+    def session_token(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == COOKIE:
+                return v
+        return ""
+
+    def is_admin(self):
+        tok = self.session_token()
+        if not tok or not ADMIN_PASSWORD:
+            return False
+        with db() as con:
+            row = con.execute("SELECT created FROM sessions WHERE token=?", (tok,)).fetchone()
+        return bool(row) and time.time() - row["created"] < SESSION_DAYS * 86400
+
+    def admin_write_ok(self):
+        # Logged in, and the request came from the site's own page (blocks cross-site forgery).
+        return self.headers.get("X-HG") == "1" and self.is_admin()
 
     def client_ip(self):
         fwd = self.headers.get("X-Forwarded-For", "")
@@ -245,19 +322,23 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"photos": [photo_json(r) for r in rows]})
 
         if p == "/api/dish-photos":
-            # Official photos you drop into static/dish-photos/<dish id>.jpg (or .png/.webp)
-            out = {}
+            # Main photo per dish: one the host uploaded on the site wins, then a file
+            # dropped into static/dish-photos/<dish id>.jpg (or .png/.webp).
+            out, set_on_site = {}, []
             folder = STATIC_DIR / "dish-photos"
             if folder.is_dir():
                 for f in sorted(folder.iterdir()):
                     if f.stem in DISH_IDS and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
-                        out[f.stem] = "dish-photos/" + f.name
-            return self.send_json({"photos": out})
+                        out[f.stem] = {"preview": "dish-photos/" + f.name, "full": "dish-photos/" + f.name}
+            with db() as con:
+                for r in con.execute("SELECT * FROM main_photos"):
+                    full = "photos/" + r["filename"]
+                    out[r["dish"]] = {"preview": "photos/" + r["preview"] if r["preview"] else full, "full": full}
+                    set_on_site.append(r["dish"])
+            return self.send_json({"photos": out, "setOnSite": set_on_site})
 
-        if p == "/api/admin/check":
-            ok = bool(ADMIN_TOKEN) and secrets.compare_digest(
-                self.headers.get("X-Admin-Token", ""), ADMIN_TOKEN)
-            return self.send_json({"ok": ok})
+        if p == "/api/me":
+            return self.send_json({"admin": self.is_admin(), "loginEnabled": bool(ADMIN_PASSWORD)})
 
         if p.startswith("/photos/"):
             name = p[len("/photos/"):]
@@ -295,6 +376,57 @@ class Handler(BaseHTTPRequestHandler):
                         (dish, voter, stars, time.time()))
             return self.send_json({"ok": True})
 
+        if url.path == "/api/login":
+            if not ADMIN_PASSWORD:
+                return self.send_json({"error": "Host login is off. Set ADMIN_PASSWORD in .env and restart."}, 403)
+            if not allowed_login(self.client_ip()):
+                return self.send_json({"error": "Too many tries. Wait a few minutes."}, 429)
+            try:
+                d = json.loads(self.read_body(4096) or b"")
+                user, pw = str(d["username"]), str(d["password"])
+            except (ValueError, KeyError, TypeError):
+                return self.send_json({"error": "bad request"}, 400)
+            ok_user = secrets.compare_digest(user.strip().lower().encode(), ADMIN_USERNAME.strip().lower().encode())
+            ok_pw = secrets.compare_digest(pw.encode(), ADMIN_PASSWORD.encode())
+            if not (ok_user and ok_pw):
+                return self.send_json({"error": "Wrong username or password."}, 401)
+            tok = secrets.token_urlsafe(32)
+            with db_lock, db() as con:
+                con.execute("DELETE FROM sessions WHERE created < ?", (time.time() - SESSION_DAYS * 86400,))
+                con.execute("INSERT INTO sessions (token, created) VALUES (?, ?)", (tok, time.time()))
+            cookie = f"{COOKIE}={tok}; Path=/; Max-Age={SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict"
+            return self.send_json({"ok": True}, cookie=cookie)
+
+        if url.path == "/api/logout":
+            tok = self.session_token()
+            if tok:
+                with db_lock, db() as con:
+                    con.execute("DELETE FROM sessions WHERE token=?", (tok,))
+            return self.send_json({"ok": True}, cookie=f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
+
+        if url.path == "/api/main-photo":
+            if not self.admin_write_ok():
+                return self.send_json({"error": "Sign in as the host first."}, 403)
+            dish = (q.get("dish") or [""])[0]
+            if dish not in DISH_IDS:
+                return self.send_json({"error": "unknown dish"}, 400)
+            data = self.read_body(MAX_UPLOAD)
+            if data is None:
+                return self.send_json({"error": f"Photos must be under {MAX_UPLOAD // 1048576} MB."}, 413)
+            try:
+                _, filename, preview = save_image(data, MAIN_PREVIEW_PX)
+            except BadImage as e:
+                return self.send_json({"error": str(e)}, 415)
+            with db_lock, db() as con:
+                old = con.execute("SELECT * FROM main_photos WHERE dish=?", (dish,)).fetchone()
+                con.execute("INSERT INTO main_photos (dish, filename, preview, updated) VALUES (?,?,?,?) "
+                            "ON CONFLICT(dish) DO UPDATE SET filename=excluded.filename, "
+                            "preview=excluded.preview, updated=excluded.updated",
+                            (dish, filename, preview, time.time()))
+            if old:
+                remove_files(old["filename"], old["preview"])
+            return self.send_json({"ok": True}, 201)
+
         if url.path == "/api/photos":
             dish = (q.get("dish") or ["general"])[0]
             if dish not in PHOTO_TAGS:
@@ -304,20 +436,10 @@ class Handler(BaseHTTPRequestHandler):
             data = self.read_body(MAX_UPLOAD)
             if data is None:
                 return self.send_json({"error": f"Photos must be under {MAX_UPLOAD // 1048576} MB."}, 413)
-            ext = sniff(data)
-            if not ext:
-                return self.send_json({"error": "That file isn't a JPEG, PNG, WebP or GIF image. "
-                                   "(iPhone: Settings → Camera → Formats → Most Compatible.)"}, 415)
-            if ext == "jpg":
-                data = scrub_gps(data)
-            pid = secrets.token_urlsafe(12)
-            filename = f"{pid}.{ext}"
-            (PHOTO_DIR / filename).write_bytes(data)
-            thumb = None
-            if ext != "gif":  # keep GIFs animated
-                thumb = f"{pid}_t.jpg"
-                if not make_thumb(PHOTO_DIR / filename, PHOTO_DIR / thumb):
-                    thumb = None
+            try:
+                pid, filename, thumb = save_image(data)
+            except BadImage as e:
+                return self.send_json({"error": str(e)}, 415)
             with db_lock, db() as con:
                 con.execute("INSERT INTO photos (id, dish, filename, created, thumb) VALUES (?,?,?,?,?)",
                             (pid, dish, filename, time.time(), thumb))
@@ -328,28 +450,33 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         url = urlparse(self.path)
-        if not url.path.startswith("/api/photos/"):
+        if not url.path.startswith(("/api/photos/", "/api/main-photo/")):
             return self.send_error(404)
-        if not ADMIN_TOKEN or not secrets.compare_digest(
-                self.headers.get("X-Admin-Token", ""), ADMIN_TOKEN):
-            return self.send_json({"error": "not allowed"}, 403)
-        pid = url.path.rsplit("/", 1)[1]
+        if not self.admin_write_ok():
+            return self.send_json({"error": "Sign in as the host first."}, 403)
+        key = url.path.rsplit("/", 1)[1]
+        if url.path.startswith("/api/main-photo/"):
+            with db_lock, db() as con:
+                row = con.execute("SELECT * FROM main_photos WHERE dish=?", (key,)).fetchone()
+                if not row:
+                    return self.send_json({"error": "not found"}, 404)
+                con.execute("DELETE FROM main_photos WHERE dish=?", (key,))
+            remove_files(row["filename"], row["preview"])
+            return self.send_json({"ok": True})
+        pid = key
         with db_lock, db() as con:
             row = con.execute("SELECT * FROM photos WHERE id=?", (pid,)).fetchone()
             if not row:
                 return self.send_json({"error": "not found"}, 404)
             con.execute("DELETE FROM photos WHERE id=?", (pid,))
-        for name in (row["filename"], row["thumb"]):
-            if name:
-                try:
-                    (PHOTO_DIR / name).unlink()
-                except OSError:
-                    pass
+        remove_files(row["filename"], row["thumb"])
         return self.send_json({"ok": True})
 
 
 if __name__ == "__main__":
     print(f"The Hungry Games is serving on port {PORT}. Data in {DATA_DIR}.", flush=True)
-    if not ADMIN_TOKEN:
-        print("ADMIN_TOKEN is not set, so photos can't be deleted from the site.", flush=True)
+    if not ADMIN_PASSWORD:
+        print("ADMIN_PASSWORD is not set, so host login is off. Set it in .env to manage photos.", flush=True)
+    else:
+        print(f"Host login is on. Username: {ADMIN_USERNAME}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

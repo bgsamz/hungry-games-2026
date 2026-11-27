@@ -128,6 +128,10 @@ button{font:inherit;cursor:pointer}
 .ov .form{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;width:min(420px,100%);display:grid;gap:12px}
 .ov input[type=password]{font:inherit;font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-height:44px}
 .btn.danger{background:#d4412f;color:#fff}
+.hostbar{margin-top:16px;padding:12px 16px;border:1px dashed var(--gold);border-radius:12px}
+.hostbar[hidden]{display:none}
+.hostbar b{color:var(--gold);font-family:"Big Shoulders Stencil Display",sans-serif;font-size:20px;letter-spacing:.04em}
+.ov input[type=text]{font:inherit;font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-height:44px}
 .linkbtn{all:unset;cursor:pointer;text-decoration:underline;color:var(--mute)}
 @media(max-width:700px){.hero .wrap,.cols{grid-template-columns:1fr}.hero svg{max-width:360px;margin:0 auto}.top .home{font-size:18px}.hero-ph{border-radius:0}}
 @media(prefers-reduced-motion:reduce){.tile{transition:none}html{scroll-behavior:auto}}
@@ -372,6 +376,7 @@ function dish(d){
   app.innerHTML=`<section class="band dhead"><div class="wrap"><small><span class="no">Contender No. ${String(i+1).padStart(2,'0')}</span> &nbsp;·&nbsp; ${d.course}</small><h1>${esc(d.name)}</h1><p class="hsum"><button type="button" data-goto="verdict" id="hsum">No votes yet</button></p></div>
   ${photo(d,'hero-ph','Photo of the '+esc(d.name.toLowerCase())+' coming soon')}</section>
   <div class="dbody">
+  <div class="hostbar up" id="hostbar" hidden></div>
   <div class="jump"><a class="btn" href="#${d.id}" data-jump>Skip the backstory, take me to the recipe ↓</a></div>
   <article class="story"><h2>The backstory</h2>${d.story.map(p=>`<p>${esc(p)}</p>`).join('')}</article>
   <section class="recipe" id="recipe-card"><h2>The recipe</h2><p class="meta" style="margin:0;color:var(--mute)">${esc(d.meta)}</p>
@@ -388,18 +393,18 @@ function dish(d){
 }
 
 const byId=Object.fromEntries(D.map(d=>[d.id,d]));
-const S={ratings:{},mine:{},photos:[],official:{},admin:'',loaded:false};
+const S={ratings:{},mine:{},photos:[],official:{},setOnSite:[],admin:false,loginEnabled:false,loaded:false};
 const store={get(k){try{return localStorage.getItem(k)||''}catch(e){return ''}},set(k,v){try{v?localStorage.setItem(k,v):localStorage.removeItem(k)}catch(e){}}};
 const VOTER=(()=>{let v=store.get('hg-voter');if(!/^[A-Za-z0-9-]{8,64}$/.test(v)){v=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12));store.set('hg-voter',v)}return v})();
-S.admin=store.get('hg-admin');
 const votes=n=>n+' vote'+(n===1?'':'s');
 const summary=r=>r&&r.count?`${r.avg.toFixed(1)} ★ · ${votes(r.count)}`:'No votes yet';
 function uploader(tag){return `<div class="up"><label class="btn">${cam.replace('<svg','<svg width="20" height="20"')} Add photos<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple data-upload="${tag}"></label><span class="muted small upmsg" aria-live="polite"></span></div>`}
 
 async function load(){
   try{
-    const [r,p,o]=await Promise.all([fetch('api/ratings?voter='+encodeURIComponent(VOTER)).then(x=>x.json()),fetch('api/photos').then(x=>x.json()),fetch('api/dish-photos').then(x=>x.json())]);
-    S.official={};for(const [k,v] of Object.entries(o.photos||{}))if(byId[k])S.official[k]=String(v);
+    const [r,p,o,me]=await Promise.all([fetch('api/ratings?voter='+encodeURIComponent(VOTER)).then(x=>x.json()),fetch('api/photos').then(x=>x.json()),fetch('api/dish-photos').then(x=>x.json()),fetch('api/me').then(x=>x.json())]);
+    S.official={};for(const [k,v] of Object.entries(o.photos||{}))if(byId[k]&&v)S.official[k]={preview:String(v.preview),full:String(v.full)};
+    S.setOnSite=(o.setOnSite||[]).map(String);S.admin=!!me.admin;S.loginEnabled=!!me.loginEnabled;
     S.ratings=r.ratings||{};S.mine=r.mine||{};
     S.photos=(p.photos||[]).filter(x=>x.dish==='general'||byId[x.dish]).map(x=>({id:String(x.id),dish:x.dish,url:String(x.url).replace(/^\/+/,''),thumb:String(x.thumb||x.url).replace(/^\/+/,'')}));
     S.loaded=true;
@@ -424,6 +429,10 @@ function paint(){
     const dr=document.getElementById('dish-rating');if(dr)dr.textContent=s;
     const mine=S.mine[d.id]||0;
     document.querySelectorAll('[data-star]').forEach(b=>{const on=+b.dataset.star<=mine;b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(+b.dataset.star===mine))});
+    const hb=document.getElementById('hostbar');
+    if(hb){hb.hidden=!S.admin;const has=S.setOnSite.includes(d.id);const key=S.admin+'|'+has;
+      if(S.admin&&hb.dataset.key!==key){hb.dataset.key=key;
+        hb.innerHTML=`<b>Host</b><label class="btn">${has?'Replace':'Upload'} main photo<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" data-main="${d.id}"></label>${has?`<button type="button" class="btn ghost" data-main-del="${d.id}">Remove main photo</button>`:''}<span class="muted small upmsg" id="mainmsg" aria-live="polite"></span>`}}
     const mm=document.getElementById('mine-msg');if(mm)mm.textContent=mine?`You gave it ${mine} star${mine>1?'s':''}. Tap again to change it, or tap the same star to take it back.`:'Tap a star. You can change your vote any time.';
   }
   const g=document.getElementById('gallery');
@@ -438,8 +447,9 @@ function fillSlots(){
   document.querySelectorAll('.ph[data-dish]').forEach(el=>{
     const id=el.dataset.dish;
     const g=S.photos.find(p=>p.dish===id);
-    const url=S.official[id]||(g&&g.thumb);
+    const url=(S.official[id]&&S.official[id].preview)||(g&&g.thumb);
     if(url&&el.dataset.src!==url){const im=new Image();im.alt=byId[id].name;im.src=url;el.dataset.src=url;put(el,im)}
+    else if(!url&&el.dataset.src){const im=el.querySelector('img');if(im)im.remove();delete el.dataset.src}
   });
 }
 function put(el,im){const old=el.querySelector('img');if(old)old.remove();el.appendChild(im)}
@@ -452,7 +462,7 @@ async function rate(id,n){
   load();
 }
 
-const MAX_MB=40;
+const MAX_MB=100;
 const mb=n=>(n/1048576).toFixed(1)+' MB';
 async function upload(input){
   const tag=input.dataset.upload;const msg=input.closest('.up').querySelector('.upmsg');
@@ -471,6 +481,23 @@ async function upload(input){
   load();
 }
 
+async function uploadMain(input){
+  const id=input.dataset.main;const f=input.files[0];input.value='';if(!f)return;
+  const msg=document.getElementById('mainmsg');
+  if(f.size>MAX_MB*1048576){msg.textContent=`That photo is ${mb(f.size)}, over the ${MAX_MB} MB limit.`;return}
+  msg.textContent=`Uploading (${mb(f.size)}), full quality…`;
+  try{const r=await fetch('api/main-photo?dish='+encodeURIComponent(id),{method:'POST',headers:{'Content-Type':f.type||'application/octet-stream','X-HG':'1'},body:f});
+    if(r.ok){msg.textContent='Main photo set.'}else{const j=await r.json().catch(()=>({}));msg.textContent=j.error||'Upload failed.'}}
+  catch(e){msg.textContent='Upload failed. Check your connection.'}
+  load();
+}
+async function removeMain(btn){
+  if(btn.dataset.confirm!=='1'){btn.dataset.confirm='1';btn.textContent='Tap again to remove';return}
+  const r=await fetch('api/main-photo/'+encodeURIComponent(btn.dataset.mainDel),{method:'DELETE',headers:{'X-HG':'1'}});
+  const msg=document.getElementById('mainmsg');if(!r.ok&&msg)msg.textContent='Couldn’t remove it.';
+  load();
+}
+
 const ov=document.createElement('div');ov.className='ov';ov.hidden=true;document.body.appendChild(ov);
 let lastFocus=null;
 function openOv(html){lastFocus=document.activeElement;ov.innerHTML=html;ov.hidden=false;const f=ov.querySelector('button,input');if(f)f.focus()}
@@ -481,31 +508,37 @@ function openPhoto(pid){
   openOv(`<div class="box"><img src="${esc(p.url)}" alt=""><div class="row"><a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener" style="color:#fff">Full size</a>${d?`<a class="btn ghost" href="#${d.id}" data-close style="color:#fff">${esc(d.name)}</a>`:''}${S.admin?`<button type="button" class="btn danger" data-del="${esc(p.id)}">Delete photo</button>`:''}<button type="button" class="btn" data-close>Close</button></div></div>`);
 }
 function openHost(){
-  openOv(`<form class="form" id="hostform"><h2 style="font-size:30px;text-transform:uppercase">Host tools</h2>
-  <p class="muted small" style="margin:0">${S.admin?'Host tools are on in this browser. Open any photo to delete it.':'Enter the admin phrase from your .env file to be able to delete guest photos.'}</p>
-  ${S.admin?'':'<input type="password" id="tok" autocomplete="off" aria-label="Admin phrase" placeholder="Admin phrase">'}
+  const body=S.admin
+    ?'<p class="muted small" style="margin:0">You’re signed in as the host. Each dish page has a host bar under its photo for setting the main photo, and you can delete any guest photo by opening it.</p>'
+    :S.loginEnabled
+      ?'<p class="muted small" style="margin:0">Sign in to set each dish’s main photo and delete guest photos.</p><input type="text" id="hu" autocomplete="username" autocapitalize="none" aria-label="Username" placeholder="Username"><input type="password" id="hp" autocomplete="current-password" aria-label="Password" placeholder="Password">'
+      :'<p class="muted small" style="margin:0">Host login is off. Set ADMIN_PASSWORD in the server’s .env file and restart it.</p>';
+  const btns=S.admin?'<button type="button" class="btn ghost" data-logout style="color:#fff">Sign out</button>':S.loginEnabled?'<button class="btn">Sign in</button>':'';
+  openOv(`<form class="form" id="hostform"><h2 style="font-size:30px;text-transform:uppercase">Host tools</h2>${body}
   <p class="small" id="hostmsg" style="margin:0;color:var(--gold)" aria-live="polite"></p>
-  <div class="row">${S.admin?'<button type="button" class="btn ghost" data-logout style="color:#fff">Turn off</button>':'<button class="btn">Turn on</button>'}<button type="button" class="btn ghost" data-close style="color:#fff">Close</button></div></form>`);
+  <div class="row">${btns}<button type="button" class="btn ghost" data-close style="color:#fff">Close</button></div></form>`);
 }
 ov.addEventListener('click',async e=>{
   if(e.target===ov||e.target.closest('[data-close]')){closeOv();return}
   const del=e.target.closest('[data-del]');
   if(del){if(del.dataset.confirm!=='1'){del.dataset.confirm='1';del.textContent='Tap again to delete for good';return}
-    const r=await fetch('api/photos/'+encodeURIComponent(del.dataset.del),{method:'DELETE',headers:{'X-Admin-Token':S.admin}});
-    if(r.ok){closeOv();load()}else{del.textContent=r.status===403?'Admin phrase no longer valid':'Couldn’t delete'}return}
-  if(e.target.closest('[data-logout]')){S.admin='';store.set('hg-admin','');closeOv()}
+    const r=await fetch('api/photos/'+encodeURIComponent(del.dataset.del),{method:'DELETE',headers:{'X-HG':'1'}});
+    if(r.ok){closeOv();load()}else{del.textContent=r.status===403?'Signed out. Sign in again under Host tools.':'Couldn’t delete'}return}
+  if(e.target.closest('[data-logout]')){await fetch('api/logout',{method:'POST',headers:{'X-HG':'1'}}).catch(()=>{});S.admin=false;closeOv();load()}
 });
 ov.addEventListener('submit',async e=>{
-  e.preventDefault();const t=document.getElementById('tok').value.trim();const m=document.getElementById('hostmsg');
-  try{const r=await fetch('api/admin/check',{headers:{'X-Admin-Token':t}}).then(x=>x.json());
-    if(r.ok){S.admin=t;store.set('hg-admin',t);closeOv()}else m.textContent='That phrase didn’t match.'}catch(err){m.textContent='Couldn’t reach the server.'}
+  e.preventDefault();const m=document.getElementById('hostmsg');const u=document.getElementById('hu'),pw=document.getElementById('hp');if(!u)return;
+  try{const r=await fetch('api/login',{method:'POST',headers:{'Content-Type':'application/json','X-HG':'1'},body:JSON.stringify({username:u.value,password:pw.value})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){S.admin=true;closeOv();load()}else{m.textContent=j.error||'Couldn’t sign in.';pw.value='';pw.focus()}}catch(err){m.textContent='Couldn’t reach the server.'}
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!ov.hidden)closeOv()});
-document.addEventListener('change',e=>{const i=e.target.closest('[data-upload]');if(i)upload(i)});
+document.addEventListener('change',e=>{const i=e.target.closest('[data-upload]');if(i){upload(i);return}const mi=e.target.closest('[data-main]');if(mi)uploadMain(mi)});
 document.addEventListener('click',e=>{
   const s=e.target.closest('[data-star]');if(s){const d=byId[decodeURIComponent(location.hash.slice(1))];if(d)rate(d.id,+s.dataset.star);return}
   const ph=e.target.closest('[data-photo]');if(ph){openPhoto(ph.dataset.photo);return}
   const go=e.target.closest('[data-goto]');if(go){document.getElementById(go.dataset.goto).scrollIntoView({behavior:'smooth'});return}
+  const md=e.target.closest('[data-main-del]');if(md){removeMain(md);return}
   if(e.target.closest('[data-host]'))openHost();
 });
 setInterval(()=>{if(!document.hidden)load()},15000);

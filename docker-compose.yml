@@ -5,10 +5,10 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Set this to any secret phrase to be able to delete guest photos from the site.
-      # Copy .env.example to .env and put it there, so it isn't committed.
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
-      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-40}
+      # Host login. Copy .env.example to .env and set these there, so they aren't committed.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-host}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
       UPLOADS_PER_10_MIN: ${UPLOADS_PER_10_MIN:-40}
     volumes:
       - ./data:/data

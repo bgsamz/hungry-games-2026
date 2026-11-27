@@ -14,7 +14,7 @@ You need [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on a Mac 
 ```sh
 git clone https://github.com/bgsamz/hungry-games-2026.git
 cd hungry-games-2026
-cp .env.example .env      # then edit .env and pick your own admin phrase
+cp .env.example .env      # then edit .env and set your host password
 docker compose up -d --build
 ```
 
@@ -44,13 +44,16 @@ Make the QR codes only once you know the final address. Each dish's link is the 
 
 Dish names for links: `turkey`, `ham`, `stuffing`, `mac-and-cheese`, `potato-casserole`, `scalloped-potatoes`, `sweet-potato`, `green-beans`, `corn-pudding`, `cranberry-sauce`, `rolls`, `pie-crust`, `pecan-pie`, `pumpkin-pie`, `sangria`.
 
-## Your own dish photos
+## Host login
 
-To set the main photo for a dish yourself, put it in `static/dish-photos/` named after the dish, for example `static/dish-photos/turkey.jpg` (`.png` and `.webp` work too), then run `docker compose up -d --build`. Without one, each dish uses its newest guest photo.
+Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env`, then restart (`docker compose up -d`). On the site, tap **Host tools** at the bottom of any page and sign in. You stay signed in on that browser for 30 days.
 
-## Deleting guest photos
+Signed in, you can:
 
-Anyone with the link can upload, so you can remove photos. Set `ADMIN_TOKEN` in `.env` (and restart). On the site, tap **Host tools** at the bottom of any page and enter that phrase. That browser can then delete any photo from its full-size view.
+- **Set each dish's main photo.** Every dish page shows a host bar under its photo with **Upload main photo**, **Replace** and **Remove**. It uploads at full quality.
+- **Delete guest photos.** Tap any photo, then **Delete photo**.
+
+Each dish's main photo is, in order: the one you uploaded as host, then a file in `static/dish-photos/<dish>.jpg` if you added one to the code, then the newest guest photo of that dish.
 
 ## Settings
 
@@ -58,8 +61,9 @@ Set these in `.env` (or `docker-compose.yml`):
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `ADMIN_TOKEN` | empty | Phrase that unlocks photo deletion. Empty means nobody can delete. |
-| `MAX_UPLOAD_MB` | `40` | Largest photo accepted, per file. Photos upload at full quality. |
+| `ADMIN_USERNAME` | `host` | Host login username. |
+| `ADMIN_PASSWORD` | empty | Host login password. Empty turns host login off. |
+| `MAX_UPLOAD_MB` | `100` | Largest photo accepted, per file. Photos upload at full quality. |
 | `UPLOADS_PER_10_MIN` | `40` | Upload limit per device's network address, to stop floods. |
 
 To change the port, edit `"8080:8080"` in `docker-compose.yml` (the first number is the port on your computer).
