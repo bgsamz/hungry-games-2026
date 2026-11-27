@@ -394,14 +394,14 @@ const VOTER=(()=>{let v=store.get('hg-voter');if(!/^[A-Za-z0-9-]{8,64}$/.test(v)
 S.admin=store.get('hg-admin');
 const votes=n=>n+' vote'+(n===1?'':'s');
 const summary=r=>r&&r.count?`${r.avg.toFixed(1)} ★ · ${votes(r.count)}`:'No votes yet';
-function uploader(tag){return `<div class="up"><label class="btn">${cam.replace('<svg','<svg width="20" height="20"')} Add photos<input type="file" accept="image/*" multiple data-upload="${tag}"></label><span class="muted small upmsg" aria-live="polite"></span></div>`}
+function uploader(tag){return `<div class="up"><label class="btn">${cam.replace('<svg','<svg width="20" height="20"')} Add photos<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple data-upload="${tag}"></label><span class="muted small upmsg" aria-live="polite"></span></div>`}
 
 async function load(){
   try{
     const [r,p,o]=await Promise.all([fetch('api/ratings?voter='+encodeURIComponent(VOTER)).then(x=>x.json()),fetch('api/photos').then(x=>x.json()),fetch('api/dish-photos').then(x=>x.json())]);
     S.official={};for(const [k,v] of Object.entries(o.photos||{}))if(byId[k])S.official[k]=String(v);
     S.ratings=r.ratings||{};S.mine=r.mine||{};
-    S.photos=(p.photos||[]).filter(x=>x.dish==='general'||byId[x.dish]).map(x=>({id:String(x.id),dish:x.dish,url:String(x.url).replace(/^\/+/,'')}));
+    S.photos=(p.photos||[]).filter(x=>x.dish==='general'||byId[x.dish]).map(x=>({id:String(x.id),dish:x.dish,url:String(x.url).replace(/^\/+/,''),thumb:String(x.thumb||x.url).replace(/^\/+/,'')}));
     S.loaded=true;
   }catch(e){}
   paint();
@@ -430,7 +430,7 @@ function paint(){
   if(g){const tag=g.dataset.tag;const list=tag==='all'?S.photos:S.photos.filter(p=>p.dish===tag);
     const key=list.map(p=>p.id).join(',');
     if(g.dataset.key!==key||!g.dataset.key&&!key){g.dataset.key=key;
-      g.innerHTML=list.length?'<div class="gal">'+list.map(p=>`<button type="button" class="gi" data-photo="${esc(p.id)}" aria-label="Open photo"><img src="${esc(p.url)}" alt="" loading="lazy">${tag==='all'&&p.dish!=='general'?`<small>${esc(byId[p.dish].name)}</small>`:''}</button>`).join('')+'</div>':`<p class="muted">${S.loaded?'No photos yet. Be the first.':'Loading photos…'}</p>`}}
+      g.innerHTML=list.length?'<div class="gal">'+list.map(p=>`<button type="button" class="gi" data-photo="${esc(p.id)}" aria-label="Open photo"><img src="${esc(p.thumb)}" alt="" loading="lazy">${tag==='all'&&p.dish!=='general'?`<small>${esc(byId[p.dish].name)}</small>`:''}</button>`).join('')+'</div>':`<p class="muted">${S.loaded?'No photos yet. Be the first.':'Loading photos…'}</p>`}}
   fillSlots();
 }
 
@@ -438,7 +438,7 @@ function fillSlots(){
   document.querySelectorAll('.ph[data-dish]').forEach(el=>{
     const id=el.dataset.dish;
     const g=S.photos.find(p=>p.dish===id);
-    const url=S.official[id]||(g&&g.url);
+    const url=S.official[id]||(g&&g.thumb);
     if(url&&el.dataset.src!==url){const im=new Image();im.alt=byId[id].name;im.src=url;el.dataset.src=url;put(el,im)}
   });
 }
@@ -452,20 +452,18 @@ async function rate(id,n){
   load();
 }
 
-async function shrink(file){
-  try{const bmp=await createImageBitmap(file);const sc=Math.min(1,2000/Math.max(bmp.width,bmp.height));
-    const c=document.createElement('canvas');c.width=Math.round(bmp.width*sc);c.height=Math.round(bmp.height*sc);
-    c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
-    const b=await new Promise(r=>c.toBlob(r,'image/jpeg',.85));return b||file}catch(e){return file}
-}
+const MAX_MB=40;
+const mb=n=>(n/1048576).toFixed(1)+' MB';
 async function upload(input){
   const tag=input.dataset.upload;const msg=input.closest('.up').querySelector('.upmsg');
   const files=[...input.files];input.value='';if(!files.length)return;
   let ok=0,err='';
   for(let i=0;i<files.length;i++){
-    msg.textContent=`Uploading ${i+1} of ${files.length}…`;
-    try{const blob=await shrink(files[i]);
-      const r=await fetch('api/photos?dish='+encodeURIComponent(tag),{method:'POST',headers:{'Content-Type':blob.type||'application/octet-stream'},body:blob});
+    const f=files[i];
+    if(f.size>MAX_MB*1048576){err=`${f.name} is ${mb(f.size)}, over the ${MAX_MB} MB limit.`;continue}
+    msg.textContent=`Uploading ${i+1} of ${files.length} (${mb(f.size)}), full quality…`;
+    try{
+      const r=await fetch('api/photos?dish='+encodeURIComponent(tag),{method:'POST',headers:{'Content-Type':f.type||'application/octet-stream'},body:f});
       if(r.ok)ok++;else{const j=await r.json().catch(()=>({}));err=j.error||'Upload failed.'}}
     catch(e){err='Upload failed. Check your connection.'}
   }
@@ -480,7 +478,7 @@ function closeOv(){ov.hidden=true;ov.innerHTML='';if(lastFocus&&lastFocus.focus)
 function openPhoto(pid){
   const p=S.photos.find(x=>x.id===pid);if(!p)return;
   const d=byId[p.dish];
-  openOv(`<div class="box"><img src="${esc(p.url)}" alt=""><div class="row">${d?`<a class="btn ghost" href="#${d.id}" data-close style="color:#fff">${esc(d.name)}</a>`:''}${S.admin?`<button type="button" class="btn danger" data-del="${esc(p.id)}">Delete photo</button>`:''}<button type="button" class="btn" data-close>Close</button></div></div>`);
+  openOv(`<div class="box"><img src="${esc(p.url)}" alt=""><div class="row"><a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener" style="color:#fff">Full size</a>${d?`<a class="btn ghost" href="#${d.id}" data-close style="color:#fff">${esc(d.name)}</a>`:''}${S.admin?`<button type="button" class="btn danger" data-del="${esc(p.id)}">Delete photo</button>`:''}<button type="button" class="btn" data-close>Close</button></div></div>`);
 }
 function openHost(){
   openOv(`<form class="form" id="hostform"><h2 style="font-size:30px;text-transform:uppercase">Host tools</h2>

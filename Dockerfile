@@ -5,6 +5,7 @@ ENV PYTHONUNBUFFERED=1 \
     DATA_DIR=/data
 
 WORKDIR /app
+RUN pip install --no-cache-dir Pillow==11.3.0
 COPY server.py ./
 COPY static ./static
 

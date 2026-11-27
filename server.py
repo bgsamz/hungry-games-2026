@@ -9,6 +9,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import struct
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,7 +19,13 @@ PORT = int(os.environ.get("PORT", "8080"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent / "static")).resolve()
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
-MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD_MB", "15")) * 1024 * 1024
+MAX_UPLOAD = int(os.environ.get("MAX_UPLOAD_MB", "40")) * 1024 * 1024
+THUMB_PX = 1200
+
+try:  # Pillow makes small previews for the galleries. Originals are always kept as uploaded.
+    from PIL import Image, ImageOps
+except ImportError:  # still works without it: galleries just show the originals
+    Image = None
 UPLOADS_PER_10_MIN = int(os.environ.get("UPLOADS_PER_10_MIN", "40"))
 
 DISH_IDS = {
@@ -61,6 +68,8 @@ with db() as con:
             created REAL NOT NULL);
         """
     )
+    if "thumb" not in [r[1] for r in con.execute("PRAGMA table_info(photos)")]:
+        con.execute("ALTER TABLE photos ADD COLUMN thumb TEXT")
 
 upload_log = {}  # ip -> [timestamps]
 upload_lock = threading.Lock()
@@ -79,6 +88,67 @@ def sniff(data: bytes):
     return None
 
 
+def scrub_gps(data: bytes) -> bytes:
+    """Blank out GPS location in a JPEG's EXIF, in place. Nothing else changes:
+    the image itself is not re-encoded, so quality is untouched."""
+    if data[:2] != b"\xff\xd8":
+        return data
+    buf = bytearray(data)
+    i = 2
+    while i + 4 <= len(buf) and buf[i] == 0xFF:
+        marker = buf[i + 1]
+        if marker in (0xD9, 0xDA):  # end of image / start of image data
+            break
+        seg_len = struct.unpack(">H", buf[i + 2:i + 4])[0]
+        start, end = i + 4, i + 2 + seg_len
+        if marker == 0xE1 and buf[start:start + 6] == b"Exif\x00\x00":
+            try:
+                _blank_gps(buf, start + 6, end)
+            except (struct.error, IndexError):
+                pass
+        i = end
+    return bytes(buf)
+
+
+def _blank_gps(buf: bytearray, tiff: int, limit: int):
+    bo = "<" if buf[tiff:tiff + 2] == b"II" else ">"
+    u16 = lambda o: struct.unpack(bo + "H", buf[o:o + 2])[0]
+    u32 = lambda o: struct.unpack(bo + "I", buf[o:o + 4])[0]
+    sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8}
+    ifd0 = tiff + u32(tiff + 4)
+    for k in range(u16(ifd0)):
+        entry = ifd0 + 2 + 12 * k
+        if u16(entry) != 0x8825:  # GPSInfo pointer
+            continue
+        gps = tiff + u32(entry + 8)
+        for j in range(u16(gps)):
+            e = gps + 2 + 12 * j
+            nbytes = sizes.get(u16(e + 2), 1) * u32(e + 4)
+            if nbytes <= 4:
+                buf[e + 8:e + 12] = b"\x00" * 4
+            else:
+                off = tiff + u32(e + 8)
+                if off + nbytes <= limit:
+                    buf[off:off + nbytes] = b"\x00" * nbytes
+        buf[gps:gps + 2] = b"\x00\x00"  # GPS directory now lists no entries
+
+
+def make_thumb(src: Path, dest: Path) -> bool:
+    if Image is None:
+        return False
+    try:
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((THUMB_PX, THUMB_PX))
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            im.save(dest, "JPEG", quality=82, optimize=True)
+        return True
+    except Exception as exc:  # odd file: fall back to showing the original
+        print(f"Couldn't make a preview for {src.name}: {exc}", flush=True)
+        return False
+
+
 def allowed_upload(ip: str) -> bool:
     now = time.time()
     with upload_lock:
@@ -92,7 +162,9 @@ def allowed_upload(ip: str) -> bool:
 
 
 def photo_json(row):
-    return {"id": row["id"], "dish": row["dish"], "url": "/photos/" + row["filename"],
+    url = "/photos/" + row["filename"]
+    return {"id": row["id"], "dish": row["dish"], "url": url,
+            "thumb": "/photos/" + row["thumb"] if row["thumb"] else url,
             "created": row["created"]}
 
 
@@ -234,13 +306,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": f"Photos must be under {MAX_UPLOAD // 1048576} MB."}, 413)
             ext = sniff(data)
             if not ext:
-                return self.send_json({"error": "That file isn't a JPEG, PNG, WebP or GIF image."}, 415)
+                return self.send_json({"error": "That file isn't a JPEG, PNG, WebP or GIF image. "
+                                   "(iPhone: Settings → Camera → Formats → Most Compatible.)"}, 415)
+            if ext == "jpg":
+                data = scrub_gps(data)
             pid = secrets.token_urlsafe(12)
             filename = f"{pid}.{ext}"
             (PHOTO_DIR / filename).write_bytes(data)
+            thumb = None
+            if ext != "gif":  # keep GIFs animated
+                thumb = f"{pid}_t.jpg"
+                if not make_thumb(PHOTO_DIR / filename, PHOTO_DIR / thumb):
+                    thumb = None
             with db_lock, db() as con:
-                con.execute("INSERT INTO photos (id, dish, filename, created) VALUES (?,?,?,?)",
-                            (pid, dish, filename, time.time()))
+                con.execute("INSERT INTO photos (id, dish, filename, created, thumb) VALUES (?,?,?,?,?)",
+                            (pid, dish, filename, time.time(), thumb))
                 row = con.execute("SELECT * FROM photos WHERE id=?", (pid,)).fetchone()
             return self.send_json({"photo": photo_json(row)}, 201)
 
@@ -259,10 +339,12 @@ class Handler(BaseHTTPRequestHandler):
             if not row:
                 return self.send_json({"error": "not found"}, 404)
             con.execute("DELETE FROM photos WHERE id=?", (pid,))
-        try:
-            (PHOTO_DIR / row["filename"]).unlink()
-        except OSError:
-            pass
+        for name in (row["filename"], row["thumb"]):
+            if name:
+                try:
+                    (PHOTO_DIR / name).unlink()
+                except OSError:
+                    pass
         return self.send_json({"ok": True})
 
 

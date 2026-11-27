@@ -59,14 +59,15 @@ Set these in `.env` (or `docker-compose.yml`):
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `ADMIN_TOKEN` | empty | Phrase that unlocks photo deletion. Empty means nobody can delete. |
-| `MAX_UPLOAD_MB` | `15` | Largest photo accepted. Phones shrink photos before uploading, so this is rarely hit. |
+| `MAX_UPLOAD_MB` | `40` | Largest photo accepted, per file. Photos upload at full quality. |
 | `UPLOADS_PER_10_MIN` | `40` | Upload limit per device's network address, to stop floods. |
 
 To change the port, edit `"8080:8080"` in `docker-compose.yml` (the first number is the port on your computer).
 
 ## How it works
 
-- `server.py`: a small Python server (standard library only) that serves the site and stores ratings and photos in SQLite (`data/hungry.db`) and `data/photos/`.
+- `server.py`: a small Python server that serves the site and stores ratings in SQLite (`data/hungry.db`) and photos in `data/photos/`.
+- Photos are kept exactly as uploaded, at full quality. The one change: GPS location is blanked out of JPEGs so guests' home addresses aren't published (done in place, without re-encoding). The server also saves a smaller `_t.jpg` preview next to each photo for the galleries; the full-quality original opens when you tap a photo.
 - `static/index.html`: the whole site. Dish text, stories and recipes are in the `D` list near the top of the script.
 - Ratings are one per dish per browser. Tapping the same star again takes your vote back. Clearing browser data lets someone vote again; it's a dinner party, not an election.
 
