@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import struct
 import time
+from io import BytesIO
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -30,13 +31,17 @@ try:  # Pillow makes small previews for the galleries. Originals are always kept
     from PIL import Image, ImageOps
 except ImportError:  # still works without it: galleries just show the originals
     Image = None
+
+try:  # reportlab builds the recipe PDFs and the QR code sheet
+    import pdfs
+except ImportError:
+    pdfs = None
 UPLOADS_PER_10_MIN = int(os.environ.get("UPLOADS_PER_10_MIN", "40"))
 
-DISH_IDS = {
-    "turkey", "ham", "stuffing", "mac-and-cheese", "potato-casserole",
-    "scalloped-potatoes", "sweet-potato", "green-beans", "corn-pudding",
-    "cranberry-sauce", "rolls", "pie-crust", "pecan-pie", "pumpkin-pie", "sangria",
-}
+# The menu (names, stories, recipes) lives in static/dishes.json, shared with the page.
+DISHES = json.loads((STATIC_DIR / "dishes.json").read_text(encoding="utf-8"))
+DISH_BY_ID = {d["id"]: d for d in DISHES}
+DISH_IDS = set(DISH_BY_ID)
 PHOTO_TAGS = DISH_IDS | {"general"}
 VOTER_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}\.(jpg|png|webp|gif)$")
@@ -205,6 +210,40 @@ def allowed_login(ip: str) -> bool:
         return len(log) <= 10
 
 
+def main_photo_path(dish_id: str):
+    """The dish's main photo for PDFs: the host's upload, then static/dish-photos, then newest guest photo."""
+    with db() as con:
+        r = con.execute("SELECT * FROM main_photos WHERE dish=?", (dish_id,)).fetchone()
+        if r:
+            return PHOTO_DIR / (r["preview"] or r["filename"])
+        folder = STATIC_DIR / "dish-photos"
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            if (folder / (dish_id + ext)).is_file():
+                return folder / (dish_id + ext)
+        r = con.execute("SELECT * FROM photos WHERE dish=? ORDER BY created DESC LIMIT 1", (dish_id,)).fetchone()
+        if r:
+            return PHOTO_DIR / (r["thumb"] or r["filename"])
+    return None
+
+
+def pdf_image_bytes(path):
+    if not path:
+        return None
+    try:
+        if Image is None:
+            return path.read_bytes()
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((1800, 1800))
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            out = BytesIO()
+            im.save(out, "JPEG", quality=85)
+            return out.getvalue()
+    except Exception:
+        return None
+
+
 def allowed_upload(ip: str) -> bool:
     now = time.time()
     with upload_lock:
@@ -238,6 +277,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def send_pdf(self, data: bytes, filename: str, inline=False):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'{"inline" if inline else "attachment"}; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def site_base(self):
+        proto = self.headers.get("X-Forwarded-Proto", "http").split(",")[0].strip()
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or f"localhost:{PORT}"
+        return f"{'https' if proto == 'https' else 'http'}://{host.split(',')[0].strip()}"
 
     def send_file(self, path: Path, cache="no-cache"):
         try:
@@ -339,6 +392,25 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/me":
             return self.send_json({"admin": self.is_admin(), "loginEnabled": bool(ADMIN_PASSWORD)})
+
+        m = re.match(r"^/recipes/([a-z0-9-]+)\.pdf$", p)
+        if m:
+            dish = DISH_BY_ID.get(m.group(1))
+            if not dish:
+                return self.send_error(404)
+            if pdfs is None:
+                return self.send_error(503, "PDFs need reportlab")
+            number = DISHES.index(dish) + 1
+            data = pdfs.recipe_pdf(dish, number, pdf_image_bytes(main_photo_path(dish["id"])))
+            return self.send_pdf(data, f"{dish['id']}-recipe.pdf")
+
+        if p == "/qr-sheet.pdf":
+            if pdfs is None:
+                return self.send_error(503, "PDFs need reportlab")
+            base = (q.get("base") or [""])[0].strip() or self.site_base()
+            if not re.match(r"^https?://[A-Za-z0-9.\-:\[\]]{1,200}(/[\w\-./]*)?$", base):
+                return self.send_error(400, "base must look like http://192.168.1.20:8080")
+            return self.send_pdf(pdfs.qr_sheet(DISHES, base), "hungry-games-qr-codes.pdf", inline=True)
 
         if p.startswith("/photos/"):
             name = p[len("/photos/"):]

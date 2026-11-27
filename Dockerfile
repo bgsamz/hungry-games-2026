@@ -5,8 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     DATA_DIR=/data
 
 WORKDIR /app
-RUN pip install --no-cache-dir Pillow==11.3.0
-COPY server.py ./
+RUN pip install --no-cache-dir "Pillow>=11,<13" "reportlab>=4.2,<6"
+COPY server.py pdfs.py ./
 COPY static ./static
 
 # Runs as root so the ./data folder mounted from the host is always writable,

@@ -4,6 +4,7 @@ The Thanksgiving 2026 recipe site: every dish has its own page with its (fiction
 
 - **Rate each dish** from 1 to 5 stars. Each dish page shows its average, and the home page has a live ranking of all fifteen.
 - **Upload photos**, either of a specific dish (on that dish's page) or of the night in general ("From the arena" on the home page).
+- **Download any recipe as a PDF**, with the dish's main photo, ready to print or save.
 
 No accounts needed. Everything runs in one small Docker container, and ratings and photos are saved in the `data/` folder next to this file.
 
@@ -40,7 +41,7 @@ To update after pulling new changes: `git pull && docker compose up -d --build`.
   tailscale funnel 8080
   ```
 
-Make the QR codes only once you know the final address. Each dish's link is the address plus `#` and the dish name, for example `http://192.168.1.20:8080/#turkey`.
+**QR codes:** sign in under **Host tools** and tap **Print QR codes**, or open `/qr-sheet.pdf` on the site (e.g. `http://192.168.1.230:8080/qr-sheet.pdf`). You get printable cut-out cards, one for the home page and one per dish. They point to whatever address you opened the sheet from. To build them for a different address, add `?base=`, e.g. `/qr-sheet.pdf?base=https://example.trycloudflare.com`. Make them only once you know the final address. Each dish's link is the address plus `#` and the dish name, for example `http://192.168.1.20:8080/#turkey`.
 
 Dish names for links: `turkey`, `ham`, `stuffing`, `mac-and-cheese`, `potato-casserole`, `scalloped-potatoes`, `sweet-potato`, `green-beans`, `corn-pudding`, `cranberry-sauce`, `rolls`, `pie-crust`, `pecan-pie`, `pumpkin-pie`, `sangria`.
 
@@ -72,7 +73,9 @@ To change the port, edit `"8080:8080"` in `docker-compose.yml` (the first number
 
 - `server.py`: a small Python server that serves the site and stores ratings in SQLite (`data/hungry.db`) and photos in `data/photos/`.
 - Photos are kept exactly as uploaded, at full quality. The one change: GPS location is blanked out of JPEGs so guests' home addresses aren't published (done in place, without re-encoding). The server also saves a smaller `_t.jpg` preview next to each photo for the galleries; the full-quality original opens when you tap a photo.
-- `static/index.html`: the whole site. Dish text, stories and recipes are in the `D` list near the top of the script.
+- `static/index.html`: the whole site.
+- `static/dishes.json`: every dish's name, story and recipe. The page and the PDFs both read it, so edit a recipe here and restart (`docker compose up -d --build`).
+- `pdfs.py`: builds the recipe PDFs (`/recipes/<dish>.pdf`) and the QR code sheet (`/qr-sheet.pdf`).
 - Ratings are one per dish per browser. Tapping the same star again takes your vote back. Clearing browser data lets someone vote again; it's a dinner party, not an election.
 
 To back everything up, copy the `data/` folder.
