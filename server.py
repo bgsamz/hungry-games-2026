@@ -42,7 +42,9 @@ UPLOADS_PER_10_MIN = int(os.environ.get("UPLOADS_PER_10_MIN", "40"))
 DISHES = json.loads((STATIC_DIR / "dishes.json").read_text(encoding="utf-8"))
 DISH_BY_ID = {d["id"]: d for d in DISHES}
 DISH_IDS = set(DISH_BY_ID)
-PHOTO_TAGS = DISH_IDS | {"general"}
+COURSES = ("Mains", "Sides", "Desserts", "Drinks", "Other")
+GUEST_RE = re.compile(r"^g-[0-9a-f]{8}$")
+SUBMITS_PER_HOUR = int(os.environ.get("SUBMITS_PER_HOUR", "10"))
 VOTER_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}\.(jpg|png|webp|gif)$")
 
@@ -84,6 +86,9 @@ with db() as con:
         CREATE TABLE IF NOT EXISTS main_photos (
             dish TEXT PRIMARY KEY, filename TEXT NOT NULL, preview TEXT, updated REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS guest_dishes (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, cook TEXT, course TEXT NOT NULL,
+            story TEXT, ing TEXT NOT NULL, steps TEXT NOT NULL, created REAL NOT NULL);
         """
     )
 
@@ -244,6 +249,68 @@ def pdf_image_bytes(path):
         return None
 
 
+def guest_dict(r):
+    """A guest dish in the same shape as the entries in dishes.json."""
+    cook = r["cook"] or ""
+    ing, steps = json.loads(r["ing"]), json.loads(r["steps"])
+    story = [p.strip() for p in (r["story"] or "").split("\n") if p.strip()]
+    return {
+        "id": r["id"], "guest": True, "cook": cook, "course": r["course"], "name": r["name"],
+        "short": f"Brought by {cook}" if cook else "A guest contender",
+        "meta": (f"A guest contender, brought by {cook}." if cook else "A guest contender."),
+        "story": story,
+        "ing": [["Ingredients", ing]] if ing else [],
+        "steps": [["Steps", steps]] if steps else [],
+        "created": r["created"],
+    }
+
+
+def guest_dishes():
+    with db() as con:
+        return [guest_dict(r) for r in con.execute("SELECT * FROM guest_dishes ORDER BY created")]
+
+
+def find_dish(dish_id: str):
+    if dish_id in DISH_BY_ID:
+        return DISH_BY_ID[dish_id]
+    if GUEST_RE.match(dish_id or ""):
+        with db() as con:
+            r = con.execute("SELECT * FROM guest_dishes WHERE id=?", (dish_id,)).fetchone()
+        return guest_dict(r) if r else None
+    return None
+
+
+def valid_dish(dish_id: str) -> bool:
+    return find_dish(dish_id) is not None
+
+
+submit_log = {}
+
+
+def allowed_submit(ip: str) -> bool:
+    now = time.time()
+    with upload_lock:
+        log = [t for t in submit_log.get(ip, []) if now - t < 3600]
+        if len(log) >= SUBMITS_PER_HOUR:
+            submit_log[ip] = log
+            return False
+        log.append(now)
+        submit_log[ip] = log
+        return True
+
+
+def clean_text(v, limit):
+    v = str(v or "").replace("\r\n", "\n").replace("\r", "\n")
+    v = "".join(ch for ch in v if ch == "\n" or ch >= " ")  # drop control characters
+    return v.strip()[:limit]
+
+
+def clean_lines(v, max_lines, max_len):
+    lines = [l.strip().lstrip("-*\u2022").strip() for l in clean_text(v, 40000).split("\n")]
+    lines = [re.sub(r"^\d+[.)]\s+", "", l) for l in lines if l]  # people often number their own steps
+    return [l[:max_len] for l in lines if l][:max_lines]
+
+
 def allowed_upload(ip: str) -> bool:
     now = time.time()
     with upload_lock:
@@ -390,17 +457,20 @@ class Handler(BaseHTTPRequestHandler):
                     set_on_site.append(r["dish"])
             return self.send_json({"photos": out, "setOnSite": set_on_site})
 
+        if p == "/api/guest-dishes":
+            return self.send_json({"dishes": guest_dishes()})
+
         if p == "/api/me":
             return self.send_json({"admin": self.is_admin(), "loginEnabled": bool(ADMIN_PASSWORD)})
 
         m = re.match(r"^/recipes/([a-z0-9-]+)\.pdf$", p)
         if m:
-            dish = DISH_BY_ID.get(m.group(1))
+            dish = find_dish(m.group(1))
             if not dish:
                 return self.send_error(404)
             if pdfs is None:
                 return self.send_error(503, "PDFs need reportlab")
-            number = DISHES.index(dish) + 1
+            number = DISHES.index(dish) + 1 if dish in DISHES else 0
             data = pdfs.recipe_pdf(dish, number, pdf_image_bytes(main_photo_path(dish["id"])))
             return self.send_pdf(data, f"{dish['id']}-recipe.pdf")
 
@@ -410,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
             base = (q.get("base") or [""])[0].strip() or self.site_base()
             if not re.match(r"^https?://[A-Za-z0-9.\-:\[\]]{1,200}(/[\w\-./]*)?$", base):
                 return self.send_error(400, "base must look like http://192.168.1.20:8080")
-            return self.send_pdf(pdfs.qr_sheet(DISHES, base), "hungry-games-qr-codes.pdf", inline=True)
+            return self.send_pdf(pdfs.qr_sheet(DISHES + guest_dishes(), base), "hungry-games-qr-codes.pdf", inline=True)
 
         if p.startswith("/photos/"):
             name = p[len("/photos/"):]
@@ -436,7 +506,7 @@ class Handler(BaseHTTPRequestHandler):
                 dish, voter, stars = d["dish"], d["voter"], int(d["stars"])
             except (ValueError, KeyError, TypeError):
                 return self.send_json({"error": "bad request"}, 400)
-            if dish not in DISH_IDS or not VOTER_RE.match(str(voter)) or not 0 <= stars <= 5:
+            if not VOTER_RE.match(str(voter)) or not 0 <= stars <= 5 or not valid_dish(dish):
                 return self.send_json({"error": "bad request"}, 400)
             with db_lock, db() as con:
                 if stars == 0:
@@ -476,11 +546,34 @@ class Handler(BaseHTTPRequestHandler):
                     con.execute("DELETE FROM sessions WHERE token=?", (tok,))
             return self.send_json({"ok": True}, cookie=f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
 
+        if url.path == "/api/guest-dishes":
+            if not allowed_submit(self.client_ip()):
+                return self.send_json({"error": "That's a lot of dishes. Try again in a while."}, 429)
+            try:
+                d = json.loads(self.read_body(64 * 1024) or b"")
+                if not isinstance(d, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json({"error": "bad request"}, 400)
+            name = clean_text(d.get("name"), 80).replace("\n", " ")
+            if not name:
+                return self.send_json({"error": "Give your dish a name."}, 400)
+            course = d.get("course") if d.get("course") in COURSES else "Other"
+            gid = "g-" + secrets.token_hex(4)
+            with db_lock, db() as con:
+                con.execute(
+                    "INSERT INTO guest_dishes (id, name, cook, course, story, ing, steps, created) VALUES (?,?,?,?,?,?,?,?)",
+                    (gid, name, clean_text(d.get("cook"), 60).replace("\n", " "), course,
+                     clean_text(d.get("story"), 5000),
+                     json.dumps(clean_lines(d.get("ingredients"), 60, 300)),
+                     json.dumps(clean_lines(d.get("steps"), 40, 1200)), time.time()))
+            return self.send_json({"dish": find_dish(gid)}, 201)
+
         if url.path == "/api/main-photo":
             if not self.admin_write_ok():
                 return self.send_json({"error": "Sign in as the host first."}, 403)
             dish = (q.get("dish") or [""])[0]
-            if dish not in DISH_IDS:
+            if not valid_dish(dish):
                 return self.send_json({"error": "unknown dish"}, 400)
             data = self.read_body(MAX_UPLOAD)
             if data is None:
@@ -501,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if url.path == "/api/photos":
             dish = (q.get("dish") or ["general"])[0]
-            if dish not in PHOTO_TAGS:
+            if dish != "general" and not valid_dish(dish):
                 return self.send_json({"error": "unknown dish"}, 400)
             if not allowed_upload(self.client_ip()):
                 return self.send_json({"error": "Too many uploads. Try again in a few minutes."}, 429)
@@ -522,11 +615,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         url = urlparse(self.path)
-        if not url.path.startswith(("/api/photos/", "/api/main-photo/")):
+        if not url.path.startswith(("/api/photos/", "/api/main-photo/", "/api/guest-dishes/")):
             return self.send_error(404)
         if not self.admin_write_ok():
             return self.send_json({"error": "Sign in as the host first."}, 403)
         key = url.path.rsplit("/", 1)[1]
+        if url.path.startswith("/api/guest-dishes/"):
+            if not GUEST_RE.match(key):
+                return self.send_json({"error": "not found"}, 404)
+            with db_lock, db() as con:
+                if not con.execute("SELECT 1 FROM guest_dishes WHERE id=?", (key,)).fetchone():
+                    return self.send_json({"error": "not found"}, 404)
+                files = [n for r in con.execute("SELECT filename, thumb FROM photos WHERE dish=?", (key,)) for n in r]
+                files += [n for r in con.execute("SELECT filename, preview FROM main_photos WHERE dish=?", (key,)) for n in r]
+                con.execute("DELETE FROM photos WHERE dish=?", (key,))
+                con.execute("DELETE FROM main_photos WHERE dish=?", (key,))
+                con.execute("DELETE FROM ratings WHERE dish=?", (key,))
+                con.execute("DELETE FROM guest_dishes WHERE id=?", (key,))
+            remove_files(*files)
+            return self.send_json({"ok": True})
         if url.path.startswith("/api/main-photo/"):
             with db_lock, db() as con:
                 row = con.execute("SELECT * FROM main_photos WHERE dish=?", (key,)).fetchone()

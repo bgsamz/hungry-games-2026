@@ -5,6 +5,7 @@ The Thanksgiving 2026 recipe site: every dish has its own page with its (fiction
 - **Rate each dish** from 1 to 5 stars. Each dish page shows its average, and the home page has a live ranking of all fifteen.
 - **Upload photos**, either of a specific dish (on that dish's page) or of the night in general ("From the arena" on the home page).
 - **Download any recipe as a PDF**, with the dish's main photo, ready to print or save.
+- **Enter their own dish** from the home page ("Bring your own contender"): a name, plus an optional photo, backstory, ingredients and steps. It gets its own page, ratings, photos and PDF, and joins the standings marked "Guest".
 
 No accounts needed. Everything runs in one small Docker container, and ratings and photos are saved in the `data/` folder next to this file.
 
@@ -53,6 +54,7 @@ Signed in, you can:
 
 - **Set each dish's main photo.** Every dish page shows a host bar under its photo with **Upload main photo**, **Replace** and **Remove**. It uploads at full quality.
 - **Delete guest photos.** Tap any photo, then **Delete photo**.
+- **Remove guest dishes.** Open the dish and use **Remove this dish** in the host bar. Its votes and photos go with it.
 
 Each dish's main photo is, in order: the one you uploaded as host, then a file in `static/dish-photos/<dish>.jpg` if you added one to the code, then the newest guest photo of that dish.
 
@@ -66,6 +68,7 @@ Set these in `.env` (or `docker-compose.yml`):
 | `ADMIN_PASSWORD` | empty | Host login password. Empty turns host login off. |
 | `MAX_UPLOAD_MB` | `100` | Largest photo accepted, per file. Photos upload at full quality. |
 | `UPLOADS_PER_10_MIN` | `40` | Upload limit per device's network address, to stop floods. |
+| `SUBMITS_PER_HOUR` | `10` | Guest dish entries allowed per network address per hour. |
 
 To change the port, edit `"8080:8080"` in `docker-compose.yml` (the first number is the port on your computer).
 

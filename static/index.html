@@ -134,6 +134,18 @@ button{font:inherit;cursor:pointer}
 .hostbar[hidden]{display:none}
 .hostbar b{color:var(--gold);font-family:"Big Shoulders Stencil Display",sans-serif;font-size:20px;letter-spacing:.04em}
 .ov input[type=text]{font:inherit;font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-height:44px}
+.byo{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;margin-top:36px;padding:22px;border:2px dashed var(--gold);border-radius:16px}
+.byo h2{font-size:clamp(28px,4vw,36px);text-transform:uppercase;margin:0}
+.byo>div{flex:1 1 320px}
+.gtag{display:inline-block;font-size:11px;font-weight:700;color:#1a0f08;background:var(--gold);border-radius:6px;padding:1px 6px;vertical-align:2px;margin-left:4px}
+.ov .form.big{width:min(640px,100%);max-height:calc(100vh - 32px);overflow:auto}
+.fld{display:grid;gap:6px;font-weight:600;font-size:15px}
+.fld input[type=text],.fld select,.fld textarea{font:inherit;font-size:16px;font-weight:400;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-height:44px;width:100%}
+.fld textarea{resize:vertical;line-height:1.45}
+.fld input[type=file]{font-size:15px;font-weight:400;color:var(--mute)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:520px){.two{grid-template-columns:1fr}}
+.btn:disabled{opacity:.6;cursor:wait}
 .linkbtn{all:unset;cursor:pointer;text-decoration:underline;color:var(--mute)}
 @media(max-width:700px){.hero .wrap,.cols{grid-template-columns:1fr}.hero svg{max-width:360px;margin:0 auto}.top .home{font-size:18px}.hero-ph{border-radius:0}}
 @media(prefers-reduced-motion:reduce){.tile{transition:none}html{scroll-behavior:auto}}
@@ -184,22 +196,33 @@ function home(){
   <p><a class="btn" href="#cranberry-sauce">Start with the origin story</a></p></div>${placeSVG}</div></section>
   <section class="band"><div class="wrap"><h2 class="sec">The standings</h2><p class="muted" style="margin:0">Live from everyone’s votes. It updates on its own.</p>
   <table class="rank"><thead><tr><th>#</th><th>Contender</th><th class="r">Rating</th><th class="r">Votes</th></tr></thead><tbody id="standings"></tbody></table></div></section>
-  <section class="band" style="padding-top:0"><div class="wrap">${COURSES.map(c=>`<div class="course"><h2>${c}</h2><div class="grid">${D.filter(d=>d.course===c).map(d=>`<a class="tile" href="#${d.id}">${photo(d,'','Photo coming soon')}<span class="no">No. ${String(D.indexOf(d)+1).padStart(2,'0')}</span><b>${esc(d.name)}</b><span>${esc(d.short)}</span><span class="tr" data-rate="${d.id}"></span></a>`).join('')}</div></div>`).join('')}</div></section>
+  <section class="band" style="padding-top:0"><div class="wrap">${COURSES.map(c=>`<div class="course"><h2>${c}</h2><div class="grid">${D.filter(d=>d.course===c).map(tile).join('')}</div></div>`).join('')}
+  <div class="course" id="guests"></div>
+  <div class="byo"><div><h2>Bring your own contender</h2><p class="muted" style="margin:6px 0 0">Made something that isn’t on the menu? Enter it. Add a photo, a backstory and the recipe if you like, and it joins the standings.</p></div><button type="button" class="btn" data-newdish>Enter a dish</button></div>
+  </div></section>
   <section class="band" style="padding-top:0"><div class="wrap photos"><h2>From the arena</h2><p class="muted" style="margin:0">Photos from the night: the table, the eating, the aftermath. Photos of a specific dish go on that dish’s page.</p>
   ${uploader('general')}<div id="gallery" data-tag="all"></div></div></section>`;
   scrollTo(0,0);
 }
 
+function tile(d){
+  const label=d.guest?'Guest contender':'No. '+String(D.indexOf(d)+1).padStart(2,'0');
+  return `<a class="tile" href="#${esc(d.id)}">${photo(d,'','Photo coming soon')}<span class="no">${label}</span><b>${esc(d.name)}</b><span>${esc(d.short)}</span><span class="tr" data-rate="${esc(d.id)}"></span></a>`;
+}
+
 function dish(d){
-  const i=D.indexOf(d),pv=D[i-1],nx=D[i+1];
+  const list=all(),i=list.indexOf(d),pv=list[i-1],nx=list[i+1];
+  const label=d.guest?'Guest contender'+(d.cook?' · brought by '+esc(d.cook):''):'Contender No. '+String(i+1).padStart(2,'0');
+  const hasRecipe=d.ing.length||d.steps.length;
   document.title=d.name+" · The Hungry Games";
-  app.innerHTML=`<section class="band dhead"><div class="wrap"><small><span class="no">Contender No. ${String(i+1).padStart(2,'0')}</span> &nbsp;·&nbsp; ${d.course}</small><h1>${esc(d.name)}</h1><p class="hsum"><button type="button" data-goto="verdict" id="hsum">No votes yet</button></p></div>
+  app.innerHTML=`<section class="band dhead"><div class="wrap"><small><span class="no">${label}</span> &nbsp;·&nbsp; ${esc(d.course)}</small><h1>${esc(d.name)}</h1><p class="hsum"><button type="button" data-goto="verdict" id="hsum">No votes yet</button></p></div>
   ${photo(d,'hero-ph','Photo of the '+esc(d.name.toLowerCase())+' coming soon')}</section>
   <div class="dbody">
   <div class="hostbar up" id="hostbar" hidden></div>
-  <div class="jump"><a class="btn" href="#${d.id}" data-jump>Skip the backstory, take me to the recipe ↓</a><a class="btn ghost" href="recipes/${d.id}.pdf" download="${d.id}-recipe.pdf">Download recipe (PDF)</a></div>
-  <article class="story"><h2>The backstory</h2>${d.story.map(p=>`<p>${esc(p)}</p>`).join('')}</article>
+  <div class="jump">${d.story.length&&hasRecipe?`<a class="btn" href="#${d.id}" data-jump>Skip the backstory, take me to the recipe ↓</a>`:''}${hasRecipe?`<a class="btn ghost" href="recipes/${d.id}.pdf" download="${d.id}-recipe.pdf">Download recipe (PDF)</a>`:''}</div>
+  ${d.story.length?`<article class="story"><h2>The backstory</h2>${d.story.map(p=>`<p>${esc(p)}</p>`).join('')}</article>`:''}
   <section class="recipe" id="recipe-card"><div class="rhead"><h2>The recipe</h2><a class="btn ghost" href="recipes/${d.id}.pdf" download="${d.id}-recipe.pdf">PDF</a></div><p class="meta" style="margin:0;color:var(--mute)">${esc(d.meta)}</p>
+  ${hasRecipe?'':'<p class="note">No recipe was shared for this one. Ask the cook.</p>'}
   <div class="cols"><div>${d.ing.map(([h,l])=>`<h3>${esc(h)}</h3><ul class="ing">${l.map(x=>`<li><button type="button" aria-pressed="false"><i></i><span>${esc(x)}</span></button></li>`).join('')}</ul>`).join('')}</div>
   <div>${d.steps.map(([h,l])=>`<h3>${esc(h)}</h3><ol class="steps">${l.map(x=>`<li>${esc(x)}</li>`).join('')}</ol>`).join('')}</div></div>
   ${d.note?`<p class="note">${esc(d.note)}</p>`:''}</section>
@@ -213,7 +236,14 @@ function dish(d){
 }
 
 let byId={};
-const S={ratings:{},mine:{},photos:[],official:{},setOnSite:[],admin:false,loginEnabled:false,loaded:false};
+const all=()=>D.concat(S.guests);
+const asText=v=>String(v==null?'':v);
+function cleanGuest(g){
+  const lines=v=>Array.isArray(v)?v.map(asText):[];
+  const groups=v=>Array.isArray(v)?v.filter(x=>Array.isArray(x)&&x.length===2).map(([h,l])=>[asText(h),lines(l)]):[];
+  return {id:asText(g.id),guest:true,cook:asText(g.cook),course:asText(g.course),name:asText(g.name),short:asText(g.short),meta:asText(g.meta),story:lines(g.story),ing:groups(g.ing),steps:groups(g.steps)};
+}
+const S={ratings:{},mine:{},photos:[],official:{},setOnSite:[],guests:[],admin:false,loginEnabled:false,loaded:false};
 const store={get(k){try{return localStorage.getItem(k)||''}catch(e){return ''}},set(k,v){try{v?localStorage.setItem(k,v):localStorage.removeItem(k)}catch(e){}}};
 const VOTER=(()=>{let v=store.get('hg-voter');if(!/^[A-Za-z0-9-]{8,64}$/.test(v)){v=(crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12));store.set('hg-voter',v)}return v})();
 const votes=n=>n+' vote'+(n===1?'':'s');
@@ -222,25 +252,34 @@ function uploader(tag){return `<div class="up"><label class="btn">${cam.replace(
 
 async function load(){
   try{
-    const [r,p,o,me]=await Promise.all([fetch('api/ratings?voter='+encodeURIComponent(VOTER)).then(x=>x.json()),fetch('api/photos').then(x=>x.json()),fetch('api/dish-photos').then(x=>x.json()),fetch('api/me').then(x=>x.json())]);
+    const [r,p,o,me,gd]=await Promise.all([fetch('api/ratings?voter='+encodeURIComponent(VOTER)).then(x=>x.json()),fetch('api/photos').then(x=>x.json()),fetch('api/dish-photos').then(x=>x.json()),fetch('api/me').then(x=>x.json()),fetch('api/guest-dishes').then(x=>x.json())]);
+    S.guests=(gd.dishes||[]).filter(g=>/^g-[0-9a-f]{8}$/.test(g&&g.id)).map(cleanGuest);
+    byId=Object.fromEntries(all().map(d=>[d.id,d]));
     S.official={};for(const [k,v] of Object.entries(o.photos||{}))if(byId[k]&&v)S.official[k]={preview:String(v.preview),full:String(v.full)};
     S.setOnSite=(o.setOnSite||[]).map(String);S.admin=!!me.admin;S.loginEnabled=!!me.loginEnabled;
     S.ratings=r.ratings||{};S.mine=r.mine||{};
     S.photos=(p.photos||[]).filter(x=>x.dish==='general'||byId[x.dish]).map(x=>({id:String(x.id),dish:x.dish,url:String(x.url).replace(/^\/+/,''),thumb:String(x.thumb||x.url).replace(/^\/+/,'')}));
     S.loaded=true;
   }catch(e){}
+  const want=decodeURIComponent(location.hash.slice(1))||'home';
+  if(app.dataset.view!==want&&(byId[want]||want==='home'||/^g-/.test(want)))route();
   paint();
 }
 
 function ranked(){
-  const rated=D.filter(d=>S.ratings[d.id]&&S.ratings[d.id].count).sort((a,b)=>S.ratings[b.id].avg-S.ratings[a.id].avg||S.ratings[b.id].count-S.ratings[a.id].count);
-  return rated.concat(D.filter(d=>!rated.includes(d)));
+  const list=all();
+  const rated=list.filter(d=>S.ratings[d.id]&&S.ratings[d.id].count).sort((a,b)=>S.ratings[b.id].avg-S.ratings[a.id].avg||S.ratings[b.id].count-S.ratings[a.id].count);
+  return rated.concat(list.filter(d=>!rated.includes(d)));
 }
 
 function paint(){
   const tb=document.getElementById('standings');
   if(tb){tb.innerHTML=ranked().map((d,i)=>{const r=S.ratings[d.id];const has=r&&r.count;
-    return `<tr class="${has&&i===0?'top1':''}"><td class="n">${has?i+1:'–'}</td><td><a href="#${d.id}">${esc(d.name)}</a>${has?`<span class="bar"><i style="width:${(r.avg/5*100).toFixed(1)}%"></i></span>`:''}</td><td class="r">${has?r.avg.toFixed(1)+' ★':'<span class="muted">–</span>'}</td><td class="r">${has?r.count:0}</td></tr>`}).join('')}
+    return `<tr class="${has&&i===0?'top1':''}"><td class="n">${has?i+1:'–'}</td><td><a href="#${esc(d.id)}">${esc(d.name)}</a>${d.guest?' <span class="gtag">Guest</span>':''}${has?`<span class="bar"><i style="width:${(r.avg/5*100).toFixed(1)}%"></i></span>`:''}</td><td class="r">${has?r.avg.toFixed(1)+' ★':'<span class="muted">–</span>'}</td><td class="r">${has?r.count:0}</td></tr>`}).join('')}
+  const gs=document.getElementById('guests');
+  if(gs){const key=S.guests.map(g=>g.id+g.name).join('|');
+    if(gs.dataset.key!==key){gs.dataset.key=key;
+      gs.innerHTML=S.guests.length?`<h2>Guest contenders</h2><div class="grid">${S.guests.map(tile).join('')}</div>`:''}}
   document.querySelectorAll('[data-rate]').forEach(el=>{const r=S.ratings[el.dataset.rate];el.textContent=r&&r.count?summary(r):''});
   const d=byId[decodeURIComponent(location.hash.slice(1))];
   if(d){
@@ -252,14 +291,14 @@ function paint(){
     const hb=document.getElementById('hostbar');
     if(hb){hb.hidden=!S.admin;const has=S.setOnSite.includes(d.id);const key=S.admin+'|'+has;
       if(S.admin&&hb.dataset.key!==key){hb.dataset.key=key;
-        hb.innerHTML=`<b>Host</b><label class="btn">${has?'Replace':'Upload'} main photo<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" data-main="${d.id}"></label>${has?`<button type="button" class="btn ghost" data-main-del="${d.id}">Remove main photo</button>`:''}<span class="muted small upmsg" id="mainmsg" aria-live="polite"></span>`}}
+        hb.innerHTML=`<b>Host</b><label class="btn">${has?'Replace':'Upload'} main photo<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" data-main="${d.id}"></label>${has?`<button type="button" class="btn ghost" data-main-del="${d.id}">Remove main photo</button>`:''}${d.guest?`<button type="button" class="btn danger" data-del-dish="${d.id}">Remove this dish</button>`:''}<span class="muted small upmsg" id="mainmsg" aria-live="polite"></span>`}}
     const mm=document.getElementById('mine-msg');if(mm)mm.textContent=mine?`You gave it ${mine} star${mine>1?'s':''}. Tap again to change it, or tap the same star to take it back.`:'Tap a star. You can change your vote any time.';
   }
   const g=document.getElementById('gallery');
   if(g){const tag=g.dataset.tag;const list=tag==='all'?S.photos:S.photos.filter(p=>p.dish===tag);
     const key=list.map(p=>p.id).join(',');
     if(g.dataset.key!==key||!g.dataset.key&&!key){g.dataset.key=key;
-      g.innerHTML=list.length?'<div class="gal">'+list.map(p=>`<button type="button" class="gi" data-photo="${esc(p.id)}" aria-label="Open photo"><img src="${esc(p.thumb)}" alt="" loading="lazy">${tag==='all'&&p.dish!=='general'?`<small>${esc(byId[p.dish].name)}</small>`:''}</button>`).join('')+'</div>':`<p class="muted">${S.loaded?'No photos yet. Be the first.':'Loading photos…'}</p>`}}
+      g.innerHTML=list.length?'<div class="gal">'+list.map(p=>`<button type="button" class="gi" data-photo="${esc(p.id)}" aria-label="Open photo"><img src="${esc(p.thumb)}" alt="" loading="lazy">${tag==='all'&&byId[p.dish]?`<small>${esc(byId[p.dish].name)}</small>`:''}</button>`).join('')+'</div>':`<p class="muted">${S.loaded?'No photos yet. Be the first.':'Loading photos…'}</p>`}}
   fillSlots();
 }
 
@@ -268,7 +307,7 @@ function fillSlots(){
     const id=el.dataset.dish;
     const g=S.photos.find(p=>p.dish===id);
     const url=(S.official[id]&&S.official[id].preview)||(g&&g.thumb);
-    if(url&&el.dataset.src!==url){const im=new Image();im.alt=byId[id].name;im.src=url;el.dataset.src=url;put(el,im)}
+    if(url&&el.dataset.src!==url){const im=new Image();im.alt=byId[id]?byId[id].name:'';im.src=url;el.dataset.src=url;put(el,im)}
     else if(!url&&el.dataset.src){const im=el.querySelector('img');if(im)im.remove();delete el.dataset.src}
   });
 }
@@ -318,6 +357,44 @@ async function removeMain(btn){
   load();
 }
 
+async function removeDish(btn){
+  if(btn.dataset.confirm!=='1'){btn.dataset.confirm='1';btn.textContent='Tap again to remove it, its votes and photos';return}
+  const r=await fetch('api/guest-dishes/'+encodeURIComponent(btn.dataset.delDish),{method:'DELETE',headers:{'X-HG':'1'}});
+  if(r.ok){location.hash='';load()}else{const msg=document.getElementById('mainmsg');if(msg)msg.textContent='Couldn’t remove it.'}
+}
+function openNewDish(){
+  openOv(`<form class="form big" id="newdish" data-sticky novalidate><h2 style="font-size:30px;text-transform:uppercase">Enter a dish</h2>
+  <p class="muted small" style="margin:0">Only the name is required. Everything else is optional, and you can add more photos on its page afterwards.</p>
+  <label class="fld">Dish name<input type="text" id="nd-name" maxlength="80" required autocomplete="off"></label>
+  <div class="two"><label class="fld">Your name<input type="text" id="nd-cook" maxlength="60" autocomplete="name"></label>
+  <label class="fld">Course<select id="nd-course">${['Mains','Sides','Desserts','Drinks','Other'].map(c=>`<option${c==='Sides'?' selected':''}>${c}</option>`).join('')}</select></label></div>
+  <label class="fld">Photo<input type="file" id="nd-photo" accept="image/jpeg,image/png,image/webp,image/gif"></label>
+  <label class="fld">Description or backstory<textarea id="nd-story" rows="4" maxlength="5000" placeholder="Where it’s from, why you make it, who wronged you."></textarea></label>
+  <label class="fld">Ingredients <span class="muted small">one per line</span><textarea id="nd-ing" rows="5" placeholder="2 cups flour&#10;1 stick butter"></textarea></label>
+  <label class="fld">Steps <span class="muted small">one per line</span><textarea id="nd-steps" rows="5" placeholder="Heat the oven to 350°F.&#10;Mix everything."></textarea></label>
+  <p class="small" id="nd-msg" style="margin:0;color:var(--gold)" aria-live="polite"></p>
+  <div class="row"><button class="btn" id="nd-go">Enter it</button><button type="button" class="btn ghost" data-close style="color:#fff">Cancel</button></div></form>`);
+  document.getElementById('nd-name').focus();
+}
+async function submitDish(){
+  const v=id=>document.getElementById(id).value;const m=document.getElementById('nd-msg');const go=document.getElementById('nd-go');
+  if(!v('nd-name').trim()){m.textContent='Give your dish a name.';document.getElementById('nd-name').focus();return}
+  const f=document.getElementById('nd-photo').files[0];
+  if(f&&f.size>MAX_MB*1048576){m.textContent=`That photo is ${mb(f.size)}, over the ${MAX_MB} MB limit.`;return}
+  go.disabled=true;m.textContent='Entering your dish…';
+  try{
+    const r=await fetch('api/guest-dishes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v('nd-name'),cook:v('nd-cook'),course:v('nd-course'),story:v('nd-story'),ingredients:v('nd-ing'),steps:v('nd-steps')})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.dish){m.textContent=j.error||'Couldn’t enter it. Try again.';go.disabled=false;return}
+    let note='';
+    if(f){m.textContent=`Uploading your photo (${mb(f.size)})…`;
+      const pr=await fetch('api/photos?dish='+encodeURIComponent(j.dish.id),{method:'POST',headers:{'Content-Type':f.type||'application/octet-stream'},body:f}).catch(()=>null);
+      if(!pr||!pr.ok){const pj=pr?await pr.json().catch(()=>({})):{};note=pj.error||'The photo didn’t upload. You can add it on the dish’s page.'}}
+    closeOv();location.hash=j.dish.id;await load();
+    if(note){const um=document.querySelector('.photos .upmsg');if(um)um.textContent=note}
+  }catch(e){m.textContent='Couldn’t reach the server. Try again.';go.disabled=false}
+}
+
 const ov=document.createElement('div');ov.className='ov';ov.hidden=true;document.body.appendChild(ov);
 let lastFocus=null;
 function openOv(html){lastFocus=document.activeElement;ov.innerHTML=html;ov.hidden=false;const f=ov.querySelector('button,input');if(f)f.focus()}
@@ -339,7 +416,7 @@ function openHost(){
   <div class="row">${btns}<button type="button" class="btn ghost" data-close style="color:#fff">Close</button></div></form>`);
 }
 ov.addEventListener('click',async e=>{
-  if(e.target===ov||e.target.closest('[data-close]')){closeOv();return}
+  if(e.target.closest('[data-close]')||e.target===ov&&!ov.querySelector('[data-sticky]')){closeOv();return}
   const del=e.target.closest('[data-del]');
   if(del){if(del.dataset.confirm!=='1'){del.dataset.confirm='1';del.textContent='Tap again to delete for good';return}
     const r=await fetch('api/photos/'+encodeURIComponent(del.dataset.del),{method:'DELETE',headers:{'X-HG':'1'}});
@@ -347,18 +424,22 @@ ov.addEventListener('click',async e=>{
   if(e.target.closest('[data-logout]')){await fetch('api/logout',{method:'POST',headers:{'X-HG':'1'}}).catch(()=>{});S.admin=false;closeOv();load()}
 });
 ov.addEventListener('submit',async e=>{
-  e.preventDefault();const m=document.getElementById('hostmsg');const u=document.getElementById('hu'),pw=document.getElementById('hp');if(!u)return;
+  e.preventDefault();
+  if(e.target.id==='newdish'){submitDish();return}
+  const m=document.getElementById('hostmsg');const u=document.getElementById('hu'),pw=document.getElementById('hp');if(!u)return;
   try{const r=await fetch('api/login',{method:'POST',headers:{'Content-Type':'application/json','X-HG':'1'},body:JSON.stringify({username:u.value,password:pw.value})});
     const j=await r.json().catch(()=>({}));
     if(r.ok){S.admin=true;closeOv();load()}else{m.textContent=j.error||'Couldn’t sign in.';pw.value='';pw.focus()}}catch(err){m.textContent='Couldn’t reach the server.'}
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!ov.hidden)closeOv()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!ov.hidden&&!ov.querySelector('[data-sticky]'))closeOv()});
 document.addEventListener('change',e=>{const i=e.target.closest('[data-upload]');if(i){upload(i);return}const mi=e.target.closest('[data-main]');if(mi)uploadMain(mi)});
 document.addEventListener('click',e=>{
   const s=e.target.closest('[data-star]');if(s){const d=byId[decodeURIComponent(location.hash.slice(1))];if(d)rate(d.id,+s.dataset.star);return}
   const ph=e.target.closest('[data-photo]');if(ph){openPhoto(ph.dataset.photo);return}
   const go=e.target.closest('[data-goto]');if(go){document.getElementById(go.dataset.goto).scrollIntoView({behavior:'smooth'});return}
   const md=e.target.closest('[data-main-del]');if(md){removeMain(md);return}
+  const dd=e.target.closest('[data-del-dish]');if(dd){removeDish(dd);return}
+  if(e.target.closest('[data-newdish]')){openNewDish();return}
   if(e.target.closest('[data-host]'))openHost();
 });
 setInterval(()=>{if(!document.hidden)load()},15000);
@@ -366,8 +447,10 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});
 
 function route(){
   const h=decodeURIComponent(location.hash.slice(1));
-  const d=D.find(x=>x.id===h);
-  d?dish(d):home();
+  const d=byId[h];
+  if(d){dish(d);app.dataset.view=h}
+  else if(/^g-/.test(h)&&!S.loaded){app.innerHTML='<section class="band"><div class="wrap"><p class="muted">Loading…</p></div></section>';app.dataset.view='loading'}
+  else{home();app.dataset.view='home'}
   paint();
 }
 app.addEventListener('click',e=>{

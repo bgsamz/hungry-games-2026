@@ -66,14 +66,16 @@ def recipe_pdf(dish: dict, number: int, image_bytes: bytes | None) -> bytes:
                             topMargin=0.7 * inch, bottomMargin=0.8 * inch,
                             title=dish["name"], author=EVENT, subject="Recipe")
     width = letter[0] - doc.leftMargin - doc.rightMargin
-    story = [_p(f"THE HUNGRY GAMES · CONTENDER NO. {number:02d} · {dish['course'].upper()}", _kick),
+    label = "GUEST CONTENDER" if dish.get("guest") else f"CONTENDER NO. {number:02d}"
+    story = [_p(f"THE HUNGRY GAMES · {label} · {dish['course'].upper()}", _kick),
              _p(dish["name"], _title)]
     photo = _photo(image_bytes, width, 3.0 * inch)
     if photo:
         story += [Spacer(1, 4), photo, Spacer(1, 10)]
     story.append(_p(dish["meta"], _meta))
 
-    story.append(_p("Ingredients", _h2))
+    if dish["ing"]:
+        story.append(_p("Ingredients", _h2))
     for heading, items in dish["ing"]:
         block = []
         if len(dish["ing"]) > 1 or heading != "Ingredients":
@@ -99,6 +101,8 @@ def recipe_pdf(dish: dict, number: int, image_bytes: bytes | None) -> bytes:
                                    for n, x in enumerate(items[1:], 2)],
                                   bulletType="1", bulletFontName="Helvetica-Bold", bulletFontSize=10.5,
                                   bulletColor=EMBER, leftIndent=20, bulletFormat="%s."))
+    if not dish["ing"] and not dish["steps"]:
+        story.append(_p("No recipe was shared for this one. Ask the cook.", _note))
     if dish.get("note"):
         story.append(_p(dish["note"], _note))
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
@@ -119,7 +123,8 @@ def qr_sheet(dishes: list, base: str) -> bytes:
     cards = [("THE STANDINGS", "All fifteen contenders", base + "/",
               "Scan for every dish, the live rankings and the photo wall.")]
     for i, d in enumerate(dishes, 1):
-        cards.append((f"CONTENDER NO. {i:02d}", d["name"], f"{base}/#{d['id']}",
+        label = "GUEST CONTENDER" if d.get("guest") else f"CONTENDER NO. {i:02d}"
+        cards.append((label, d["name"], f"{base}/#{d['id']}",
                       "Scan for the backstory, the recipe, and to cast your vote."))
 
     buf = BytesIO()
